@@ -3,170 +3,190 @@ var fs = require('fs');
 var util = require('util');
 var toMarkdown = require('to-markdown');
 var http = require('http');
+var FetchStream = require("fetch").FetchStream;
 
 processExport();
 
 function processExport() {
-	var parser = new xml2js.Parser();
-	fs.readFile('export.xml', function(err, data) {
-		if(err) {
-			console.log('Error: ' + err);
-		}
+  var parser = new xml2js.Parser();
+  fs.readFile('export.xml', function(err, data) {
+    if (err) {
+      console.log('Error: ' + err);
+    }
 
-	    parser.parseString(data, function (err, result) {
-	    	if(err) {
-	    		console.log('Error parsing xml: ' + err);
-	    	}
-	    	console.log('Parsed XML');
-	        //console.log(util.inspect(result.rss.channel));
+    parser.parseString(data, function (err, result) {
+      if(err) {
+        console.log('Error parsing xml: ' + err);
+      }
+      console.log('Parsed XML');
+      //console.log(util.inspect(result.rss.channel));
 
-	        var posts = result.rss.channel[0].item;
+      var posts = result.rss.channel[0].item;
 
-			
-			fs.mkdir('out', function() {
-		        for(var i = 0; i < posts.length; i++) {
-	        		processPost(posts[i]);
-		        	//console.log(util.inspect(posts[i]));
-		        }
-			});
-	    });
-	});
+      fs.mkdir('out', function() {
+            for(var i = 0; i < posts.length; i++) {
+              processPost(posts[i]);
+              //console.log(util.inspect(posts[i]));
+            }
+      });
+    });
+  });
 }
 
 function processPost(post) {
-	console.log('Processing Post');
+  console.log('Processing Post');
 
-	var postTitle = post.title;
-	console.log('Post title: ' + postTitle);
-	var postDate = new Date(post.pubDate);
-	console.log('Post Date: ' + postDate);
-	var postData = post['content:encoded'][0];
-	console.log('Post length: ' + postData.length + ' bytes');
-	var slug = post['wp:post_name'];
-	console.log('Post slug: ' + slug);
+  var postTitle = post.title;
+  var postDate = new Date(post.pubDate);
+  var postData = post['content:encoded'][0];
+  var slug = post['wp:post_name'];
 
-	//Merge categories and tags into tags
-	var categories = [];
-	if (post.category != undefined) {
-		for(var i = 0; i < post.category.length; i++) {
-			var cat = post.category[i]['_'];
-			if(cat != "Uncategorized")
-				categories.push(cat);
-			//console.log('CATEGORY: ' + util.inspect(post.category[i]['_']));
-		}
-	}
+  // TODO: what are these entries
+  if (!postData.length || postDate == 'Invalid Date') {
+    console.error('Post', postTitle, 'had no content or bad date, skipping!');
+    return;
+  }
 
-	var fullPath = 'out\\' + postDate.getFullYear() + '\\' + getPaddedMonthNumber(postDate.getMonth() + 1) + '\\' + slug;
+  console.log('Post title: ' + postTitle);
+  console.log('Post Date: ' + postDate);
+  console.log('Post length: ' + postData.length + ' bytes');
+  console.log('Post slug: ' + slug);
 
-	fs.mkdir('out\\' + postDate.getFullYear(), function() {
-		fs.mkdir('out\\' + postDate.getFullYear() + '\\' + getPaddedMonthNumber(postDate.getMonth() + 1), function() {
-			fs.mkdir(fullPath, function() {
-				//Find all images
-				var patt = new RegExp("(?:src=\"(.*?)\")", "gi");
-				
-				var m;
-				var matches = [];
-				while((m = patt.exec(postData)) !== null) {
-					matches.push(m[1]);
-					//console.log("Found: " + m[1]);
-				}
+  // Merge categories and tags into tags
+  var categories = [];
+  if (post.category != undefined) {
+    for(var i = 0; i < post.category.length; i++) {
+      var cat = post.category[i]['_'];
+      if(cat != "Uncategorized")
+        categories.push(cat);
+      //console.log('CATEGORY: ' + util.inspect(post.category[i]['_']));
+    }
+  }
 
+  var fullPath = 'out/' + postDate.getFullYear() + '/' + getPaddedMonthNumber(postDate.getMonth() + 1) + '/' + slug;
 
-				if(matches != null && matches.length > 0) {
-					for(var i = 0; i < matches.length; i++) {
-						//console.log('Post image found: ' + matches[i])
+  fs.mkdir('out/' + postDate.getFullYear(), function() {
+    fs.mkdir('out/' + postDate.getFullYear() + '/' + getPaddedMonthNumber(postDate.getMonth() + 1), function() {
+      fs.mkdir(fullPath, function() {
+        //Find all images
+        var patt = new RegExp("(?:src=\"(.*?)\")", "gi");
+        
+        var m;
+        var matches = [];
+        while((m = patt.exec(postData)) !== null) {
+          matches.push(m[1]);
+          //console.log("Found: " + m[1]);
+        }
 
-						var url = matches[i];
-						var urlParts = matches[i].split('/');
-						var imageName = urlParts[urlParts.length - 1];
+        if(matches != null && matches.length > 0) {
+          for(var i = 0; i < matches.length; i++) {
+            //console.log('Post image found: ' + matches[i])
 
-						var filePath = fullPath + '\\' + imageName;
+            var url = matches[i];
+            var urlParts = matches[i].split('/');
+            var imageName = urlParts[urlParts.length - 1].split('?')[0];
 
-						downloadFile(url, filePath);
+            var filePath = fullPath + '/' + imageName;
 
-						//Make the image name local relative in the markdown
-						postData = postData.replace(url, imageName);
-						//console.log('Replacing ' + url + ' with ' + imageName);
-					}
-				}
+            downloadFile(url, filePath);
 
-				var markdown = toMarkdown.toMarkdown(postData);
+            // Make the image name local relative in the markdown
+            postData = postData.replace(url, imageName);
+            //console.log('Replacing ' + url + ' with ' + imageName);
+          }
+        }
 
-				//Fix characters that markdown doesn't like
-				// smart single quotes and apostrophe
-    			markdown = markdown.replace(/[\u2018|\u2019|\u201A]/g, "\'");
-    			// smart double quotes
-    			markdown = markdown.replace(/&quot;/g, "\"");
-    			markdown = markdown.replace(/[\u201C|\u201D|\u201E]/g, "\"");
-				// ellipsis
-				markdown = markdown.replace(/\u2026/g, "...");
-				// dashes
-				markdown = markdown.replace(/[\u2013|\u2014]/g, "-");
-				// circumflex
-				markdown = markdown.replace(/\u02C6/g, "^");
-				// open angle bracket
-				markdown = markdown.replace(/\u2039/g, "<");
-				markdown = markdown.replace(/&lt;/g, "<");
-				// close angle bracket
-				markdown = markdown.replace(/\u203A/g, ">");
-				markdown = markdown.replace(/&gt;/g, ">");
-				// spaces
-				markdown = markdown.replace(/[\u02DC|\u00A0]/g, " ");
-				// ampersand
-				markdown = markdown.replace(/&amp;/g, "&");
+        var markdown = toMarkdown.toMarkdown(postData);
 
-				var header = "";
-				header += "---\n";
-				header += "layout: post\n";
-				header += "title: " + postTitle + "\n";
-				header += "date: " + postDate.getFullYear() + '-' + getPaddedMonthNumber(postDate.getMonth() + 1) + '-' + getPaddedDayNumber(postDate.getDate()) + "\n";
-				if(categories.length > 0)
-					header += "tags: " + JSON.stringify(categories) + '\n';
-				header += "---\n";
-				header += "\n";
+        // remove WP paragraph spacers
+        markdown = markdown.replace(/<div style="height:18px;"><\/div>/g, '');
 
-				fs.writeFile(fullPath + '\\index.html.md', header + markdown, function(err) {
+        // replace WP <div> with <p>
+        markdown = markdown.replace(/<div>/g, '');
+        markdown = markdown.replace(/<\/div>/g, '');
 
-				});
-			});
-		});		
-	});
+        // Fix characters that markdown doesn't like
+        // smart single quotes and apostrophe
+        markdown = markdown.replace(/[\u2018|\u2019|\u201A]/g, "\'");
+        // smart double quotes
+        markdown = markdown.replace(/&quot;/g, "\"");
+        markdown = markdown.replace(/[\u201C|\u201D|\u201E]/g, "\"");
+        // ellipsis
+        markdown = markdown.replace(/\u2026/g, "...");
+        // dashes
+        markdown = markdown.replace(/[\u2013|\u2014]/g, "-");
+        // circumflex
+        markdown = markdown.replace(/\u02C6/g, "^");
+        // open angle bracket
+        markdown = markdown.replace(/\u2039/g, "<");
+        markdown = markdown.replace(/&lt;/g, "<");
+        // close angle bracket
+        markdown = markdown.replace(/\u203A/g, ">");
+        markdown = markdown.replace(/&gt;/g, ">");
+        // spaces
+        markdown = markdown.replace(/[\u02DC|\u00A0]/g, " ");
+        // ampersand
+        markdown = markdown.replace(/&amp;/g, "&");
+
+        var header = "";
+        header += "---\n";
+        header += "layout: post\n";
+        header += "title: " + postTitle + "\n";
+        header += "date: " + postDate.getFullYear() + '-' + getPaddedMonthNumber(postDate.getMonth() + 1) + '-' + getPaddedDayNumber(postDate.getDate()) + "\n";
+        if(categories.length > 0)
+          header += "tags: " + JSON.stringify(categories) + '\n';
+        header += "---\n";
+        header += "\n";
+
+        fs.writeFile(fullPath + '/index.html.md', header + markdown, function(err) {
+          if (err) {
+            console.error('Unable to write the file for ', url)
+          }
+        });
+      });
+    });   
+  });
 }
 
 function downloadFile(url, path) {
-	 //console.log("Attempt downloading " + url + " to " + path + ' ' + url.indexOf("https:") );
-	if (url.indexOf("https:")  == -1) {
-		if (url.indexOf(".jpg") >=0 || url.indexOf(".png") >=0 || url.indexOf(".png") >=0) {
-			var file = fs.createWriteStream(path).on('open', function() {
-				var request = http.get(url, function(response) {
-				console.log("Response code: " + response.statusCode);
-				response.pipe(file);
-			}).on('error', function(err) {
-				console.log('error downloading url: ' + url + ' to ' + path);
-		});
-		}).on('error', function(err) {
-				console.log('error downloading url2: ' + url + ' to ' + path);
+  // try and fetch plain
+  if (url.indexOf("https:") > -1) {
+    url = url.replace('https', 'http');
+  }
 
-		});
-	}
-	else {
-	  console.log ('passing on: ' + url + ' ' + url.indexOf('https:')); 
-	}
-	}
-	else {
-	  console.log ('passing on: ' + url + ' ' + url.indexOf('https:')); 
-	}
+  if (/\.(jpg|jpeg|png|gif)/.test(url)) {
+
+    var out = fs.createWriteStream(path);
+    new FetchStream(url).pipe(out);
+
+    /*
+    var file = fs.createWriteStream(path).on('open', function() {
+      var request = http.get(url, function(response) {
+        console.log("Response code: " + response.statusCode, 'for', url);
+        response.pipe(file);
+      }).on('error', function(err) {
+        console.log('error downloading url: ' + url + ' to ' + path);
+      });
+    }).on('error', function(err) {
+      console.log('error downloading url2: ' + url + ' to ' + path);
+    });
+    */
+  }
+  else {
+    console.log ('passing on: ' + url);
+  }
 }
+
 function getPaddedMonthNumber(month) {
-	if(month < 10)
-		return "0" + month;
-	else
-		return month;
+  if(month < 10)
+    return "0" + month;
+  else
+    return month;
 }
 
 function getPaddedDayNumber(day) {
-	if(day < 10)
-		return "0" + day;
-	else
-		return day;
+  if(day < 10)
+    return "0" + day;
+  else
+    return day;
 }

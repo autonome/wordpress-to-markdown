@@ -20,7 +20,8 @@
   },
   "dependencies": {
     "to-markdown": "~0.0.1",
-    "xml2js": "~0.2.8"
+    "xml2js": "~0.2.8",
+    "fetch": "~1.1.0"
   },
   "main": "convert.js"
 }
